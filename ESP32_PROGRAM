@@ -1,0 +1,336 @@
+#include <WiFi.h>
+#include <ESP32Servo.h> 
+
+// WiFi 
+const char* ssid = "Arjun_Dahal";
+const char* password = "CLEB2D6D4F";
+WiFiServer server(80);
+
+// Motor Pins
+#define ENA_PIN 25
+#define IN1_PIN 26
+#define IN2_PIN 27
+#define ENB_PIN 14
+#define IN3_PIN 12
+#define IN4_PIN 13
+
+// Ultrasonic 
+#define TRIG_PIN 32
+#define ECHO_PIN 33
+
+// Servo 
+#define SERVO_PIN 23
+Servo servoSensor;
+
+// Motor Struct
+struct motor {
+  byte speed = 0;
+  struct { byte input1 = LOW; byte input2 = LOW; } direction;
+};
+motor motorA, motorB;
+
+// Self-driving flag 
+bool selfDriving = false;
+
+// PWM Channels 
+#define CHANNEL_A 0
+#define CHANNEL_B 1
+
+void setupPWM()
+{
+  ledcAttachPin(ENA_PIN, CHANNEL_A);
+  ledcAttachPin(ENB_PIN, CHANNEL_B);
+  ledcSetup(CHANNEL_A, 1000, 8);     // 1 kHz, 8-bit
+  ledcSetup(CHANNEL_B, 1000, 8);
+}
+
+// Motor Functions
+void sendToMotor(motor &m, int channel, int in1, int in2)
+{
+  ledcWrite(channel, m.speed);
+  digitalWrite(in1, m.direction.input1);
+  digitalWrite(in2, m.direction.input2);
+}
+
+void sendToMotorA()
+{
+  sendToMotor(motorA, CHANNEL_A, IN1_PIN, IN2_PIN);
+}
+
+void sendToMotorB()
+{
+  sendToMotor(motorB, CHANNEL_B, IN3_PIN, IN4_PIN);
+}
+
+void setMotorSpeed(motor &m, byte spd)
+{
+  m.speed = spd;
+}
+
+void setMotorDirectionForward(motor &m)
+{
+  m.direction.input1 = HIGH;
+  m.direction.input2 = LOW;
+}
+
+void setMotorDirectionBackward(motor &m)
+{
+  m.direction.input1 = LOW;
+  m.direction.input2 = HIGH;
+}
+
+void stopMotor(motor &m)
+{
+  m.speed = 0;
+  m.direction.input1 = LOW;
+  m.direction.input2 = LOW;
+}
+
+void motorStop()
+{
+  stopMotor(motorA);
+  stopMotor(motorB);
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void speedUp()
+{
+  if (motorA.speed < 255) motorA.speed += 20;
+  if (motorB.speed < 255) motorB.speed += 20;
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void speedDown()
+{
+  if (motorA.speed > 20) motorA.speed -= 20;
+  if (motorB.speed > 20) motorB.speed -= 20;
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void goForward()
+{
+  setMotorDirectionForward(motorA);
+  setMotorDirectionForward(motorB);
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void goBackward()
+{
+  setMotorDirectionBackward(motorA);
+  setMotorDirectionBackward(motorB);
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void turnLeft()
+{
+  setMotorDirectionForward(motorA);
+  setMotorDirectionBackward(motorB);
+  sendToMotorA();
+  sendToMotorB();
+}
+
+void turnRight()
+{
+  setMotorDirectionBackward(motorA);
+  setMotorDirectionForward(motorB);
+  sendToMotorA();
+  sendToMotorB();
+}
+
+// Ultrasonic
+long readDistanceCM()
+{
+  digitalWrite(TRIG_PIN, LOW);
+  delayMicroseconds(2);
+
+  digitalWrite(TRIG_PIN, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(TRIG_PIN, LOW);
+
+  long duration = pulseIn(ECHO_PIN, HIGH, 30000);
+  long distance = duration * 0.034 / 2;
+
+  return distance;
+}
+
+// Self-driving
+void selfDrivingLoop()
+{
+  if (!selfDriving) return;
+
+  long centerDist = readDistanceCM();
+
+  if (centerDist > 10) {
+    goForward();
+  }
+  else {
+    motorStop();
+    delay(200);
+
+    long distances[3];
+    int direction = -1;
+
+    // Scan Left
+    servoSensor.write(0);
+    delay(500);
+    distances[0] = readDistanceCM();
+
+    // Scan Center
+    servoSensor.write(90);
+    delay(500);
+    distances[1] = readDistanceCM();
+
+    // Scan Right
+    servoSensor.write(180);
+    delay(500);
+    distances[2] = readDistanceCM();
+
+    long maxDist = distances[0];
+    direction = 0;
+
+    for (int i = 1; i < 3; i++) {
+      if (distances[i] > maxDist) {
+        maxDist = distances[i];
+        direction = i;
+      }
+    }
+
+    if (maxDist > 10) {
+      if (direction == 0) turnLeft();
+      else if (direction == 1) goForward();
+      else turnRight();
+    }
+    else {
+      motorStop();
+    }
+  }
+}
+
+//  Web Page 
+String htmlPage()
+{
+  String page = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'>";
+  page += "<style>button{width:120px;height:60px;font-size:20px;margin:10px;}</style></head><body>";
+  page += "<h2>ESP32 RC CAR CONTROL</h2>";
+  page += "<button onclick=\"location.href='/up'\">UP</button><br>";
+  page += "<button onclick=\"location.href='/left'\">LEFT</button>";
+  page += "<button onclick=\"location.href='/stop'\">STOP</button>";
+  page += "<button onclick=\"location.href='/right'\">RIGHT</button><br>";
+  page += "<button onclick=\"location.href='/down'\">DOWN</button><br><br>";
+  page += "<button onclick=\"location.href='/speedup'\">SPEED +</button>";
+  page += "<button onclick=\"location.href='/speeddown'\">SPEED -</button><br>";
+  page += "<button onclick=\"location.href='/start'\">START</button>";
+  page += "<button onclick=\"location.href='/stop'\">STOP</button><br><br>";
+  page += "<button onclick=\"location.href='/selfdrive'\">SELF DRIVING</button>";
+  page += "<button onclick=\"location.href='/stopselfdrive'\">STOP SELF DRIVING</button>";
+  page += "</body></html>";
+
+  return page;
+}
+
+//  Setup 
+void setup()
+{
+  Serial.begin(115200);
+
+  pinMode(IN1_PIN, OUTPUT);
+  pinMode(IN2_PIN, OUTPUT);
+  pinMode(IN3_PIN, OUTPUT);
+  pinMode(IN4_PIN, OUTPUT);
+
+  pinMode(TRIG_PIN, OUTPUT);
+  pinMode(ECHO_PIN, INPUT);
+
+  servoSensor.attach(SERVO_PIN);
+
+  setupPWM();
+  sendToMotorA();
+  sendToMotorB();
+
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println();
+  Serial.println("WiFi connected!");
+  Serial.print("IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  server.begin();
+}
+
+// Loop 
+void loop()
+{
+  WiFiClient client = server.available();
+
+  if (client) {
+    String header = "";
+    String currentLine = "";
+    unsigned long currentTime = millis();
+    unsigned long previousTime = currentTime;
+    const long timeoutTime = 2000;
+
+    while (client.connected() && currentTime - previousTime <= timeoutTime)
+    {
+      currentTime = millis();
+
+      if (client.available()) {
+        char c = client.read();
+        header += c;
+
+        if (c == '\n') {
+          if (currentLine.length() == 0) {
+
+            if (header.indexOf("GET /up") >= 0) goForward();
+            else if (header.indexOf("GET /down") >= 0) goBackward();
+            else if (header.indexOf("GET /left") >= 0) turnLeft();
+            else if (header.indexOf("GET /right") >= 0) turnRight();
+            else if (header.indexOf("GET /stop") >= 0) motorStop();
+            else if (header.indexOf("GET /speedup") >= 0) speedUp();
+            else if (header.indexOf("GET /speeddown") >= 0) speedDown();
+            else if (header.indexOf("GET /start") >= 0) {
+              speedUp();
+              goForward();
+            }
+            else if (header.indexOf("GET /selfdrive") >= 0) selfDriving = true;
+            else if (header.indexOf("GET /stopselfdrive") >= 0) {
+              selfDriving = false;
+              motorStop();
+            }
+
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+            client.println(htmlPage());
+            client.println();
+
+            break;
+          }
+          else {
+            currentLine = "";
+          }
+        }
+        else if (c != '\r') {
+          currentLine += c;
+        }
+      }
+    }
+
+    client.stop();
+  }
+
+  selfDrivingLoop();
+}
