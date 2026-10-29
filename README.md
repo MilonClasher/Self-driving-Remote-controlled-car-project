@@ -1,2 +1,2 @@
 
-!!! TO BE UPDATED SOON !!!
+A self-driving & remote control car made at home. First with Arduino and IR receiver to control with IR remote, then upgraded the Arduino to Esp32 and wifi-control with Self-Driving feature Include…
